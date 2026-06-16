@@ -1,0 +1,15 @@
+# Normalize line endings: text files use LF in the repo.
+* text=auto eol=lf
+
+# Scripts must stay LF (they run in Linux containers / CI)
+*.sh text eol=lf
+*.lua text eol=lf
+
+# Windows batch files keep CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary
+*.jar binary
+*.png binary
+*.jpg binary
