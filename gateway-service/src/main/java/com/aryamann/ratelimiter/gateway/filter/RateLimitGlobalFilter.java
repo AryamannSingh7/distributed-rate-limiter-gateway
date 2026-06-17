@@ -1,7 +1,7 @@
 package com.aryamann.ratelimiter.gateway.filter;
 
 import com.aryamann.ratelimiter.core.RateLimitResult;
-import com.aryamann.ratelimiter.core.RateLimiter;
+import com.aryamann.ratelimiter.core.RateLimiterRegistry;
 import com.aryamann.ratelimiter.core.RuleConfig;
 import com.aryamann.ratelimiter.gateway.config.RateLimitProperties;
 import com.aryamann.ratelimiter.gateway.resolver.ClientKeyResolver;
@@ -42,14 +42,14 @@ public class RateLimitGlobalFilter implements GlobalFilter, Ordered {
     static final String HEADER_REMAINING = "X-RateLimit-Remaining";
     static final String HEADER_RESET = "X-RateLimit-Reset";
 
-    private final RateLimiter rateLimiter;
+    private final RateLimiterRegistry registry;
     private final ClientKeyResolver keyResolver;
     private final RateLimitProperties properties;
 
-    public RateLimitGlobalFilter(RateLimiter rateLimiter,
+    public RateLimitGlobalFilter(RateLimiterRegistry registry,
                                  ClientKeyResolver keyResolver,
                                  RateLimitProperties properties) {
-        this.rateLimiter = rateLimiter;
+        this.registry = registry;
         this.keyResolver = keyResolver;
         this.properties = properties;
     }
@@ -63,7 +63,7 @@ public class RateLimitGlobalFilter implements GlobalFilter, Ordered {
         RuleConfig rule = properties.toRule();
         String key = buildKey(exchange, rule);
 
-        return rateLimiter.tryAcquire(key, rule)
+        return registry.get(rule.algorithm()).tryAcquire(key, rule)
                 .onErrorResume(ex -> failOpenOrError(ex, key, rule))
                 .flatMap(result -> result.allowed()
                         ? proceed(exchange, chain, result)

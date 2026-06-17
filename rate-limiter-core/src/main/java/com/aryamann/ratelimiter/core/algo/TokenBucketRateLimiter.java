@@ -1,7 +1,6 @@
 package com.aryamann.ratelimiter.core.algo;
 
 import com.aryamann.ratelimiter.core.Algorithm;
-import com.aryamann.ratelimiter.core.RateLimitResult;
 import com.aryamann.ratelimiter.core.RuleConfig;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 
@@ -50,14 +49,5 @@ public class TokenBucketRateLimiter extends AbstractLuaRateLimiter {
                 Long.toString(nowMs),
                 Long.toString(REQUESTED),
                 Long.toString(ttlMs));
-    }
-
-    @Override
-    protected RateLimitResult toResult(RuleConfig rule, List<Long> raw) {
-        boolean allowed = raw.get(0) == 1L;
-        long remaining = raw.get(1);
-        long retryAfterMs = raw.get(2);
-        long resetAfterMs = raw.get(3);
-        return new RateLimitResult(allowed, rule.limit(), remaining, retryAfterMs, resetAfterMs);
     }
 }

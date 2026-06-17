@@ -48,8 +48,18 @@ public abstract class AbstractLuaRateLimiter implements RateLimiter {
     /** Lua ARGV for this rule at time {@code nowMs}. All values are passed as strings; Lua parses them. */
     protected abstract List<String> argv(RuleConfig rule, long nowMs);
 
-    /** Map the script's integer return array into a {@link RateLimitResult}. */
-    protected abstract RateLimitResult toResult(RuleConfig rule, List<Long> raw);
+    /**
+     * Map the script's return array into a {@link RateLimitResult}. Every algorithm's script returns
+     * the same 4-tuple {@code {allowed(0|1), remaining, retryAfterMs, resetAfterMs}}; the limit is
+     * taken from the rule. Overridable should an algorithm ever need a different shape.
+     */
+    protected RateLimitResult toResult(RuleConfig rule, List<Long> raw) {
+        boolean allowed = raw.get(0) == 1L;
+        long remaining = raw.get(1);
+        long retryAfterMs = raw.get(2);
+        long resetAfterMs = raw.get(3);
+        return new RateLimitResult(allowed, rule.limit(), remaining, retryAfterMs, resetAfterMs);
+    }
 
     @Override
     public Mono<RateLimitResult> tryAcquire(String key, RuleConfig rule) {
