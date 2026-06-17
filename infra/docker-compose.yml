@@ -1,0 +1,49 @@
+# Single-instance topology for the distributed rate limiter (M2).
+#
+#   client ──▶ gateway:8080 ──(atomic Lua)──▶ redis
+#                   └────────(proxy /api/**)──▶ demo-backend:9000
+#
+# Observability (Prometheus + Grafana) is added in M4. App images are built from the
+# per-module Dockerfiles via the docker CLI — build the jars first
+# (`mvn -DskipTests package`), then `docker compose up --build` (see infra/README.md).
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: rl-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  demo-backend:
+    image: rate-limiter/demo-backend:0.1.0-SNAPSHOT
+    build:
+      context: ../demo-backend
+      dockerfile: Dockerfile
+    container_name: rl-demo-backend
+    expose:
+      - "9000"
+    restart: unless-stopped
+
+  gateway:
+    image: rate-limiter/gateway-service:0.1.0-SNAPSHOT
+    build:
+      context: ../gateway-service
+      dockerfile: Dockerfile
+    container_name: rl-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      BACKEND_URI: http://demo-backend:9000
+    depends_on:
+      redis:
+        condition: service_healthy
+      demo-backend:
+        condition: service_started
+    restart: unless-stopped
