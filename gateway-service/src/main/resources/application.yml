@@ -8,6 +8,21 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+  cloud:
+    gateway:
+      routes:
+        - id: demo-api
+          uri: ${BACKEND_URI:http://localhost:9000}
+          predicates:
+            - Path=/api/**
+
+# Rate limiting (single global rule for M2; per-tier/route rules arrive in M3).
+ratelimit:
+  enabled: true
+  algorithm: TOKEN_BUCKET
+  limit: 5
+  window: 1s
+  fail-open: true
 
 management:
   endpoints:
