@@ -1,0 +1,13 @@
+# Prometheus scrape config for the rate-limiter stack.
+# Scrapes the gateway's Spring Boot Actuator Prometheus endpoint.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: gateway
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['gateway:8080']
+        labels:
+          application: gateway-service

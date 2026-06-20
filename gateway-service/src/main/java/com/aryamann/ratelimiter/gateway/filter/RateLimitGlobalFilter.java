@@ -6,6 +6,8 @@ import com.aryamann.ratelimiter.core.RuleConfig;
 import com.aryamann.ratelimiter.gateway.config.RateLimitProperties;
 import com.aryamann.ratelimiter.gateway.config.RateLimitResolver;
 import com.aryamann.ratelimiter.gateway.resolver.ClientKeyResolver;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tags;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
@@ -43,19 +45,29 @@ public class RateLimitGlobalFilter implements GlobalFilter, Ordered {
     static final String HEADER_REMAINING = "X-RateLimit-Remaining";
     static final String HEADER_RESET = "X-RateLimit-Reset";
 
+    /** Counter of rate-limit decisions; dimensioned by {@code outcome}, {@code tier}, {@code route}, {@code algorithm}. */
+    static final String METRIC_DECISIONS = "ratelimit.requests";
+    static final String OUTCOME_ALLOWED = "allowed";
+    static final String OUTCOME_BLOCKED = "blocked";
+    static final String OUTCOME_FAILED_OPEN = "failed_open";
+    static final String OUTCOME_ERROR = "error";
+
     private final RateLimiterRegistry registry;
     private final ClientKeyResolver keyResolver;
     private final RateLimitResolver ruleResolver;
     private final RateLimitProperties properties;
+    private final MeterRegistry meterRegistry;
 
     public RateLimitGlobalFilter(RateLimiterRegistry registry,
                                  ClientKeyResolver keyResolver,
                                  RateLimitResolver ruleResolver,
-                                 RateLimitProperties properties) {
+                                 RateLimitProperties properties,
+                                 MeterRegistry meterRegistry) {
         this.registry = registry;
         this.keyResolver = keyResolver;
         this.ruleResolver = ruleResolver;
         this.properties = properties;
+        this.meterRegistry = meterRegistry;
     }
 
     @Override
@@ -70,11 +82,23 @@ public class RateLimitGlobalFilter implements GlobalFilter, Ordered {
         RuleConfig rule = decision.rule();
         String key = buildKey(decision.tier(), routeId, rule, keyResolver.resolve(exchange));
 
+        Tags tags = Tags.of(
+                "tier", decision.tier(),
+                "route", routeId != null ? routeId : "unknown",
+                "algorithm", rule.algorithm().name().toLowerCase(Locale.ROOT));
+
         return registry.get(rule.algorithm()).tryAcquire(key, rule)
-                .onErrorResume(ex -> failOpenOrError(ex, key, rule))
+                // doOnNext sits upstream of onErrorResume, so it only counts genuine limiter decisions;
+                // the fail-open fallback value below bypasses it and is counted separately.
+                .doOnNext(result -> count(tags, result.allowed() ? OUTCOME_ALLOWED : OUTCOME_BLOCKED))
+                .onErrorResume(ex -> failOpenOrError(ex, key, rule, tags))
                 .flatMap(result -> result.allowed()
                         ? proceed(exchange, chain, result)
                         : reject(exchange, result));
+    }
+
+    private void count(Tags tags, String outcome) {
+        meterRegistry.counter(METRIC_DECISIONS, tags.and("outcome", outcome)).increment();
     }
 
     private Mono<Void> proceed(ServerWebExchange exchange, GatewayFilterChain chain, RateLimitResult result) {
@@ -109,12 +133,14 @@ public class RateLimitGlobalFilter implements GlobalFilter, Ordered {
         }
     }
 
-    private Mono<RateLimitResult> failOpenOrError(Throwable ex, String key, RuleConfig rule) {
+    private Mono<RateLimitResult> failOpenOrError(Throwable ex, String key, RuleConfig rule, Tags tags) {
         if (properties.isFailOpen()) {
             log.warn("Rate limiter error for key '{}', failing open: {}", key, ex.toString());
+            count(tags, OUTCOME_FAILED_OPEN);
             return Mono.just(new RateLimitResult(true, rule.limit(), rule.limit(), 0L, rule.windowMs()));
         }
         log.warn("Rate limiter error for key '{}', failing closed: {}", key, ex.toString());
+        count(tags, OUTCOME_ERROR);
         return Mono.error(ex);
     }
 

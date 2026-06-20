@@ -1,5 +1,7 @@
 package com.aryamann.ratelimiter.gateway.filter;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import okhttp3.mockwebserver.Dispatcher;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -121,6 +123,9 @@ class RateLimitGatewayTest {
     @Autowired
     private WebTestClient client;
 
+    @Autowired
+    private MeterRegistry meterRegistry;
+
     @Test
     void allowsUpToLimitThenReturns429() {
         String apiKey = "test-" + UUID.randomUUID();
@@ -185,5 +190,36 @@ class RateLimitGatewayTest {
                     .expectHeader().valueEquals("X-RateLimit-Limit", "10")
                     .expectHeader().valueEquals("X-RateLimit-Remaining", Long.toString(expectedRemaining));
         }
+    }
+
+    @Test
+    void emitsDecisionMetricsTaggedByOutcomeTierRouteAlgorithm() {
+        String apiKey = "metrics-" + UUID.randomUUID(); // unmapped -> free tier (TOKEN_BUCKET, limit 3)
+
+        double allowedBefore = decisionCount("allowed");
+        double blockedBefore = decisionCount("blocked");
+
+        // Drain the free bucket (3 allowed) then trip one block.
+        for (int i = 0; i < 3; i++) {
+            client.get().uri("/api/echo").header("X-API-Key", apiKey).exchange().expectStatus().isOk();
+        }
+        client.get().uri("/api/echo").header("X-API-Key", apiKey)
+                .exchange().expectStatus().isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+
+        assertThat(decisionCount("allowed") - allowedBefore)
+                .as("3 admitted requests recorded as allowed").isEqualTo(3.0);
+        assertThat(decisionCount("blocked") - blockedBefore)
+                .as("the 429 recorded as blocked").isEqualTo(1.0);
+    }
+
+    /** Counter value for the free/test-route/token_bucket dimension with the given outcome (0 if absent). */
+    private double decisionCount(String outcome) {
+        Counter counter = meterRegistry.find("ratelimit.requests")
+                .tag("outcome", outcome)
+                .tag("tier", "free")
+                .tag("route", "test-route")
+                .tag("algorithm", "token_bucket")
+                .counter();
+        return counter == null ? 0.0 : counter.count();
     }
 }

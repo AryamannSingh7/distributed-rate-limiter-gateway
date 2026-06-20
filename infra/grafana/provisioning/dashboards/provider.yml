@@ -1,0 +1,14 @@
+# Loads any dashboard JSON dropped into /var/lib/grafana/dashboards on boot.
+apiVersion: 1
+
+providers:
+  - name: rate-limiter
+    orgId: 1
+    folder: ''
+    type: file
+    disableDeletion: false
+    editable: true
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

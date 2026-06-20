@@ -1,11 +1,11 @@
-# Single-instance topology for the distributed rate limiter (M2).
+# Single-instance topology for the distributed rate limiter (M2) + observability (M4).
 #
 #   client ──▶ gateway:8080 ──(atomic Lua)──▶ redis
 #                   └────────(proxy /api/**)──▶ demo-backend:9000
+#                   └────────(/actuator/prometheus)──▶ prometheus:9090 ──▶ grafana:3000
 #
-# Observability (Prometheus + Grafana) is added in M4. App images are built from the
-# per-module Dockerfiles via the docker CLI — build the jars first
-# (`mvn -DskipTests package`), then `docker compose up --build` (see infra/README.md).
+# App images are built from the per-module Dockerfiles via the docker CLI — build the jars
+# first (`mvn -DskipTests package`), then `docker compose up --build` (see infra/README.md).
 services:
   redis:
     image: redis:7-alpine
@@ -46,4 +46,33 @@ services:
         condition: service_healthy
       demo-backend:
         condition: service_started
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: rl-prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: rl-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      # Demo-only credentials; anonymous viewing is on so the dashboard opens with no login.
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
     restart: unless-stopped
