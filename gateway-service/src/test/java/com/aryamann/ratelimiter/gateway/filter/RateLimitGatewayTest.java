@@ -5,9 +5,12 @@ import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -34,9 +37,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
-                "ratelimit.algorithm=TOKEN_BUCKET",
-                "ratelimit.limit=3",
-                "ratelimit.window=60s",
+                // Tiered, config-driven rules: free callers get 3/window, the premium-mapped key gets 10.
+                "ratelimit.default-tier=free",
+                "ratelimit.tiers.free.algorithm=TOKEN_BUCKET",
+                "ratelimit.tiers.free.limit=3",
+                "ratelimit.tiers.free.window=60s",
+                "ratelimit.tiers.premium.algorithm=TOKEN_BUCKET",
+                "ratelimit.tiers.premium.limit=10",
+                "ratelimit.tiers.premium.window=60s",
+                "ratelimit.api-keys[premium-key]=premium",
                 "ratelimit.fail-open=false"
         })
 class RateLimitGatewayTest {
@@ -77,11 +86,26 @@ class RateLimitGatewayTest {
         }
     }
 
+    @BeforeAll
+    static void flushRedis() {
+        // The premium test uses a fixed API key (it must match the api-keys mapping), so its bucket
+        // would otherwise persist across reruns against the shared test Redis. Start from a clean DB.
+        LettuceConnectionFactory cf =
+                new LettuceConnectionFactory(new RedisStandaloneConfiguration(redisHost, redisPort));
+        cf.afterPropertiesSet();
+        try {
+            cf.getConnection().serverCommands().flushDb();
+        } finally {
+            cf.destroy();
+        }
+    }
+
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
         registry.add("spring.data.redis.host", () -> redisHost);
         registry.add("spring.data.redis.port", () -> redisPort);
-        registry.add("spring.cloud.gateway.routes[0].id", () -> "demo-api");
+        // A route with no per-route override in application.yml, so the test exercises its own tier rules.
+        registry.add("spring.cloud.gateway.routes[0].id", () -> "test-route");
         registry.add("spring.cloud.gateway.routes[0].uri", () -> backend.url("/").toString());
         registry.add("spring.cloud.gateway.routes[0].predicates[0]", () -> "Path=/api/**");
     }
@@ -146,5 +170,20 @@ class RateLimitGatewayTest {
         client.get().uri("/api/echo").header("X-API-Key", keyB)
                 .exchange().expectStatus().isOk()
                 .expectHeader().valueEquals("X-RateLimit-Remaining", "2");
+    }
+
+    @Test
+    void premiumApiKeyGetsTheHigherTierLimit() {
+        // "premium-key" is mapped to the premium tier (limit 10) purely in configuration, so it must
+        // sail past the free tier's limit of 3 and advertise the larger limit in the header.
+        for (int i = 0; i < 4; i++) {
+            long expectedRemaining = 9 - i;
+            client.get().uri("/api/echo")
+                    .header("X-API-Key", "premium-key")
+                    .exchange()
+                    .expectStatus().isOk()
+                    .expectHeader().valueEquals("X-RateLimit-Limit", "10")
+                    .expectHeader().valueEquals("X-RateLimit-Remaining", Long.toString(expectedRemaining));
+        }
     }
 }

@@ -5,13 +5,24 @@ import com.aryamann.ratelimiter.core.RuleConfig;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Externalized rate limiting configuration ({@code ratelimit.*}).
  *
- * <p>For M2 this is a single global rule applied to every route; M3 expands it into per-tier /
- * per-route rules. The two-knob surface ({@code limit} per {@code window}) plus a swappable
- * {@code algorithm} is what lets behaviour change with no code change.
+ * <p>The rule enforced for a request (algorithm + limit + window) is resolved from two dimensions,
+ * both pure configuration so behaviour changes with no rebuild:
+ * <ul>
+ *   <li><b>tier</b> — the caller's plan (e.g. {@code free} / {@code premium}), chosen by mapping the
+ *       caller's API key through {@link #apiKeys}; unknown or missing keys fall back to
+ *       {@link #defaultTier}.</li>
+ *   <li><b>route</b> — a route may override the rule for a given tier via {@link #routes}, e.g. an
+ *       expensive endpoint can be stricter even for premium callers.</li>
+ * </ul>
+ *
+ * <p>Resolution precedence (most specific first) lives in {@code RateLimitResolver}:
+ * {@code routes[routeId].tiers[tier]} → {@code tiers[tier]} → {@code tiers[defaultTier]}.
  */
 @ConfigurationProperties(prefix = "ratelimit")
 public class RateLimitProperties {
@@ -19,24 +30,71 @@ public class RateLimitProperties {
     /** Master switch — when false the filter passes every request straight through. */
     private boolean enabled = true;
 
-    /** Which algorithm to enforce. Switchable without code changes. */
-    private Algorithm algorithm = Algorithm.TOKEN_BUCKET;
-
-    /** Max requests permitted per {@link #window} (bucket capacity for token bucket). */
-    private long limit = 100;
-
-    /** The window / refill period, e.g. {@code 1s}, {@code 500ms}, {@code 1m}. */
-    private Duration window = Duration.ofSeconds(1);
-
     /**
      * On a Redis/limiter error: when true (default) admit the request (availability over strictness);
      * when false reject it. A deliberate availability tradeoff documented in the README.
      */
     private boolean failOpen = true;
 
-    /** Build the immutable core rule this configuration describes. */
-    public RuleConfig toRule() {
-        return RuleConfig.of(algorithm, limit, window);
+    /** Tier applied to callers whose API key is unmapped (or who send no key). */
+    private String defaultTier = "free";
+
+    /** Named tiers and the rule each enforces. */
+    private Map<String, Rule> tiers = new LinkedHashMap<>();
+
+    /** API key → tier name. Keys not listed here resolve to {@link #defaultTier}. */
+    private Map<String, String> apiKeys = new LinkedHashMap<>();
+
+    /** Per-route overrides of the tier rules, keyed by Spring Cloud Gateway route id. */
+    private Map<String, RouteRules> routes = new LinkedHashMap<>();
+
+    /** A single rule's knobs, bindable from YAML; mirrors {@link RuleConfig}. */
+    public static class Rule {
+        private Algorithm algorithm = Algorithm.TOKEN_BUCKET;
+        private long limit = 100;
+        private Duration window = Duration.ofSeconds(1);
+
+        /** Build the immutable core rule this entry describes. */
+        public RuleConfig toRule() {
+            return RuleConfig.of(algorithm, limit, window);
+        }
+
+        public Algorithm getAlgorithm() {
+            return algorithm;
+        }
+
+        public void setAlgorithm(Algorithm algorithm) {
+            this.algorithm = algorithm;
+        }
+
+        public long getLimit() {
+            return limit;
+        }
+
+        public void setLimit(long limit) {
+            this.limit = limit;
+        }
+
+        public Duration getWindow() {
+            return window;
+        }
+
+        public void setWindow(Duration window) {
+            this.window = window;
+        }
+    }
+
+    /** A route's per-tier rule overrides. */
+    public static class RouteRules {
+        private Map<String, Rule> tiers = new LinkedHashMap<>();
+
+        public Map<String, Rule> getTiers() {
+            return tiers;
+        }
+
+        public void setTiers(Map<String, Rule> tiers) {
+            this.tiers = tiers;
+        }
     }
 
     public boolean isEnabled() {
@@ -47,35 +105,43 @@ public class RateLimitProperties {
         this.enabled = enabled;
     }
 
-    public Algorithm getAlgorithm() {
-        return algorithm;
-    }
-
-    public void setAlgorithm(Algorithm algorithm) {
-        this.algorithm = algorithm;
-    }
-
-    public long getLimit() {
-        return limit;
-    }
-
-    public void setLimit(long limit) {
-        this.limit = limit;
-    }
-
-    public Duration getWindow() {
-        return window;
-    }
-
-    public void setWindow(Duration window) {
-        this.window = window;
-    }
-
     public boolean isFailOpen() {
         return failOpen;
     }
 
     public void setFailOpen(boolean failOpen) {
         this.failOpen = failOpen;
+    }
+
+    public String getDefaultTier() {
+        return defaultTier;
+    }
+
+    public void setDefaultTier(String defaultTier) {
+        this.defaultTier = defaultTier;
+    }
+
+    public Map<String, Rule> getTiers() {
+        return tiers;
+    }
+
+    public void setTiers(Map<String, Rule> tiers) {
+        this.tiers = tiers;
+    }
+
+    public Map<String, String> getApiKeys() {
+        return apiKeys;
+    }
+
+    public void setApiKeys(Map<String, String> apiKeys) {
+        this.apiKeys = apiKeys;
+    }
+
+    public Map<String, RouteRules> getRoutes() {
+        return routes;
+    }
+
+    public void setRoutes(Map<String, RouteRules> routes) {
+        this.routes = routes;
     }
 }

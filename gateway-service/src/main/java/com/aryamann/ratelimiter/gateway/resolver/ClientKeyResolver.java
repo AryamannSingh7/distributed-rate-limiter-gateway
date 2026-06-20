@@ -20,17 +20,25 @@ public class ClientKeyResolver {
 
     /** @return a stable, prefixed identity for the caller; never null. */
     public String resolve(ServerWebExchange exchange) {
-        ServerHttpRequest request = exchange.getRequest();
-
-        String apiKey = request.getHeaders().getFirst(API_KEY_HEADER);
-        if (apiKey != null && !apiKey.isBlank()) {
-            return "key:" + apiKey.trim();
+        String apiKey = apiKey(exchange);
+        if (apiKey != null) {
+            return "key:" + apiKey;
         }
 
-        InetSocketAddress remote = request.getRemoteAddress();
+        InetSocketAddress remote = exchange.getRequest().getRemoteAddress();
         if (remote != null && remote.getAddress() != null) {
             return "ip:" + remote.getAddress().getHostAddress();
         }
         return "ip:unknown";
+    }
+
+    /**
+     * The caller's raw {@code X-API-Key}, trimmed, or {@code null} if none was supplied. Used to map
+     * the caller onto a tier; {@link #resolve} turns it into the bucket identity.
+     */
+    public String apiKey(ServerWebExchange exchange) {
+        ServerHttpRequest request = exchange.getRequest();
+        String apiKey = request.getHeaders().getFirst(API_KEY_HEADER);
+        return (apiKey != null && !apiKey.isBlank()) ? apiKey.trim() : null;
     }
 }

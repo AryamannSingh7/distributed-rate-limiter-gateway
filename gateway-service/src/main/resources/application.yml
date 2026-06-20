@@ -16,13 +16,34 @@ spring:
           predicates:
             - Path=/api/**
 
-# Rate limiting (single global rule for M2; per-tier/route rules arrive in M3).
+# Rate limiting — all behaviour is config-driven; changing limits/algorithms/tiers needs no rebuild.
+# A request resolves to a rule by: tier (from its API key) and route. Precedence (most specific first):
+#   routes.<routeId>.tiers.<tier>  ->  tiers.<tier>  ->  tiers.<default-tier>
 ratelimit:
   enabled: true
-  algorithm: TOKEN_BUCKET
-  limit: 5
-  window: 1s
   fail-open: true
+  default-tier: free
+  tiers:
+    free:
+      algorithm: SLIDING_WINDOW_COUNTER
+      limit: 20
+      window: 1s
+    premium:
+      algorithm: TOKEN_BUCKET
+      limit: 200
+      window: 1s
+  # Map specific API keys onto a tier; everything else falls back to default-tier (free).
+  api-keys:
+    "[premium-demo-key]": premium
+  # Per-route override: free callers hit a stricter Fixed Window on the demo route, while premium
+  # callers keep their global tier rule (demonstrates route + tier resolution together).
+  routes:
+    demo-api:
+      tiers:
+        free:
+          algorithm: FIXED_WINDOW
+          limit: 5
+          window: 1s
 
 management:
   endpoints:

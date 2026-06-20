@@ -4,6 +4,7 @@ import com.aryamann.ratelimiter.core.RateLimitResult;
 import com.aryamann.ratelimiter.core.RateLimiterRegistry;
 import com.aryamann.ratelimiter.core.RuleConfig;
 import com.aryamann.ratelimiter.gateway.config.RateLimitProperties;
+import com.aryamann.ratelimiter.gateway.config.RateLimitResolver;
 import com.aryamann.ratelimiter.gateway.resolver.ClientKeyResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,13 +45,16 @@ public class RateLimitGlobalFilter implements GlobalFilter, Ordered {
 
     private final RateLimiterRegistry registry;
     private final ClientKeyResolver keyResolver;
+    private final RateLimitResolver ruleResolver;
     private final RateLimitProperties properties;
 
     public RateLimitGlobalFilter(RateLimiterRegistry registry,
                                  ClientKeyResolver keyResolver,
+                                 RateLimitResolver ruleResolver,
                                  RateLimitProperties properties) {
         this.registry = registry;
         this.keyResolver = keyResolver;
+        this.ruleResolver = ruleResolver;
         this.properties = properties;
     }
 
@@ -60,8 +64,11 @@ public class RateLimitGlobalFilter implements GlobalFilter, Ordered {
             return chain.filter(exchange);
         }
 
-        RuleConfig rule = properties.toRule();
-        String key = buildKey(exchange, rule);
+        Route route = exchange.getAttribute(ServerWebExchangeUtils.GATEWAY_ROUTE_ATTR);
+        String routeId = route != null ? route.getId() : null;
+        RateLimitResolver.Decision decision = ruleResolver.resolve(routeId, keyResolver.apiKey(exchange));
+        RuleConfig rule = decision.rule();
+        String key = buildKey(decision.tier(), routeId, rule, keyResolver.resolve(exchange));
 
         return registry.get(rule.algorithm()).tryAcquire(key, rule)
                 .onErrorResume(ex -> failOpenOrError(ex, key, rule))
@@ -111,11 +118,11 @@ public class RateLimitGlobalFilter implements GlobalFilter, Ordered {
         return Mono.error(ex);
     }
 
-    private String buildKey(ServerWebExchange exchange, RuleConfig rule) {
-        Route route = exchange.getAttribute(ServerWebExchangeUtils.GATEWAY_ROUTE_ATTR);
-        String routeId = route != null ? route.getId() : "unknown";
-        String identity = keyResolver.resolve(exchange);
-        return "rl:" + rule.algorithm().name().toLowerCase(Locale.ROOT) + ":" + routeId + ":" + identity;
+    private String buildKey(String tier, String routeId, RuleConfig rule, String identity) {
+        // tier + algorithm are part of the namespace: changing either (e.g. promoting a key to a new
+        // tier, or switching algorithm) starts a clean bucket rather than reusing incompatible state.
+        String rid = routeId != null ? routeId : "unknown";
+        return "rl:" + tier + ":" + rule.algorithm().name().toLowerCase(Locale.ROOT) + ":" + rid + ":" + identity;
     }
 
     @Override
