@@ -3,6 +3,7 @@ package com.aryamann.ratelimiter.gateway.config;
 import com.aryamann.ratelimiter.core.RateLimiter;
 import com.aryamann.ratelimiter.core.RateLimiterRegistry;
 import com.aryamann.ratelimiter.core.algo.FixedWindowRateLimiter;
+import com.aryamann.ratelimiter.core.algo.SlidingWindowCounterRateLimiter;
 import com.aryamann.ratelimiter.core.algo.SlidingWindowLogRateLimiter;
 import com.aryamann.ratelimiter.core.algo.TokenBucketRateLimiter;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -41,6 +42,11 @@ public class GatewayRateLimitConfig {
     @Bean
     public SlidingWindowLogRateLimiter slidingWindowLogRateLimiter(ReactiveStringRedisTemplate redis, Clock clock) {
         return new SlidingWindowLogRateLimiter(redis, clock);
+    }
+
+    @Bean
+    public SlidingWindowCounterRateLimiter slidingWindowCounterRateLimiter(ReactiveStringRedisTemplate redis, Clock clock) {
+        return new SlidingWindowCounterRateLimiter(redis, clock);
     }
 
     @Bean
