@@ -32,9 +32,18 @@ ratelimit:
       algorithm: TOKEN_BUCKET
       limit: 200
       window: 1s
+    # Effectively-unlimited tier used only by the k6 throughput benchmark (M6): every request
+    # still traverses the full atomic Lua check-and-decrement, but the limit is high enough that
+    # none are blocked, so the run measures gateway + limiter overhead (req/s, latency) rather
+    # than 429 rejection.
+    bench:
+      algorithm: TOKEN_BUCKET
+      limit: 1000000
+      window: 1s
   # Map specific API keys onto a tier; everything else falls back to default-tier (free).
   api-keys:
     "[premium-demo-key]": premium
+    "[bench-key]": bench
   # Per-route override: free callers hit a stricter Fixed Window on the demo route, while premium
   # callers keep their global tier rule (demonstrates route + tier resolution together).
   routes:

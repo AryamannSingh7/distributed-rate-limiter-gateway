@@ -76,3 +76,25 @@ services:
     depends_on:
       - prometheus
     restart: unless-stopped
+
+  # M6 — k6 throughput/latency benchmark. Profile-gated so a normal `docker compose up` does
+  # NOT start it; run it on demand against the live gateway with:
+  #   docker compose --profile bench up k6
+  # While it runs, watch the load land in Grafana (http://localhost:3000). Tune via env, e.g.:
+  #   VUS=100 DURATION=2m docker compose --profile bench up k6
+  k6:
+    image: grafana/k6:0.53.0
+    container_name: rl-k6
+    profiles: ["bench"]
+    environment:
+      BASE_URL: http://gateway:8080
+      API_KEY: bench-key
+      VUS: ${VUS:-50}
+      DURATION: ${DURATION:-60s}
+    volumes:
+      - ./k6:/scripts:ro
+    command: ["run", "/scripts/throughput.js"]
+    depends_on:
+      gateway:
+        condition: service_started
+    restart: "no"

@@ -94,6 +94,34 @@ done
 - **Grafana** → http://localhost:3000 (anonymous access on; dashboard *Rate Limiter — Gateway*)
 - **Prometheus** → http://localhost:9090 (try the query `sum by (outcome) (rate(ratelimit_requests_total[1m]))`)
 
+## 5. Load benchmark — k6 (throughput + latency)
+
+A profile-gated `k6` service drives traffic through the gateway and reports req/s and latency
+quantiles. It uses the dedicated **`bench` tier** (`X-API-Key: bench-key`, Token Bucket with an
+effectively-unlimited limit) so every request still traverses the full atomic Lua path but none
+are blocked — so the numbers reflect **gateway + limiter overhead**, not 429 rejection.
+
+```bash
+# from the infra/ directory, against the running stack:
+docker compose --profile bench up k6
+
+# tune load via env (defaults: 50 VUs for 60s):
+VUS=100 DURATION=2m docker compose --profile bench up k6
+```
+
+While it runs, watch the load land live in Grafana (http://localhost:3000). The run **fails
+with a non-zero exit** if its thresholds are breached (`http_req_failed < 1%`, no unexpected
+non-200s, `p95 < 50ms`, `p99 < 150ms`) — so it's CI-gradeable.
+
+To run it standalone (needs [k6](https://k6.io/docs/get-started/installation/) on the host and a
+gateway on `localhost:8080`):
+
+```bash
+k6 run infra/k6/throughput.js
+```
+
+See [`k6/README.md`](k6/README.md) for the script and tunables.
+
 ## Endpoints
 | URL | What |
 |---|---|
