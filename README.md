@@ -111,14 +111,14 @@ How a request is mapped to a bucket, and what this service trusts:
 
 ## Roadmap
 
-- [x] **M0** — Maven multi-module skeleton
-- [x] **M1** — Core abstractions + Token Bucket Lua, proven atomic
-- [x] **M2** — End-to-end gateway (filter + demo backend, 429 + headers)
-- [x] **M3** — All 4 algorithms + config-driven switching + tiers
-- [x] **M4** — Observability (Micrometer + Prometheus + Grafana)
-- [x] **M5** — Distributed correctness test (Testcontainers, 2 instances)
-- [x] **M6** — k6 load tests + benchmark numbers
-- [x] **M7** — CI + README polish
+- [x] **P1** — Maven multi-module skeleton
+- [x] **P2** — Core abstractions + Token Bucket Lua, proven atomic
+- [x] **P3** — End-to-end gateway (filter + demo backend, 429 + headers)
+- [x] **P4** — All 4 algorithms + config-driven switching + tiers
+- [x] **P5** — Observability (Micrometer + Prometheus + Grafana)
+- [x] **P6** — Distributed correctness test (Testcontainers, 2 instances)
+- [x] **P7** — k6 load tests + benchmark numbers
+- [x] **P8** — CI + README polish
 
 ## Distributed correctness
 
