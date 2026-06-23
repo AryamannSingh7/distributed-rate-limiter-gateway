@@ -79,9 +79,10 @@ done
 ```
 
 A 429 response carries `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and
-`X-RateLimit-Reset`. Tiers, algorithms, limits, and per-route overrides are all defined in
-[`application.yml`](gateway-service/src/main/resources/application.yml) — changing them needs no
-rebuild.
+`X-RateLimit-Reset`. Both `Retry-After` and `X-RateLimit-Reset` are expressed as **seconds from now**
+(a delta, not a Unix epoch timestamp). Tiers, algorithms, limits, and per-route overrides are all
+defined in [`application.yml`](gateway-service/src/main/resources/application.yml) — changing them
+needs no rebuild.
 
 > **Local note (Windows / Docker Desktop):** if Testcontainers can't reach the Docker daemon, start
 > a Redis container yourself and run the tests against it:
@@ -93,6 +94,20 @@ rebuild.
 (Ubuntu, Temurin JDK 17, cached Maven). On Linux runners Docker is available, so Testcontainers
 spins up Redis itself — the full suite, including the **distributed correctness** and
 **concurrency/atomicity** tests, runs in CI exactly as it does locally.
+
+## Identity & trust model
+
+How a request is mapped to a bucket, and what this service trusts:
+
+- **Bucket identity** is a *recognized* `X-API-Key` (one listed in `ratelimit.api-keys`), otherwise the
+  client IP. An unknown or forged key does **not** mint its own bucket — it falls back to the IP bucket
+  — so a caller can't evade limits by rotating a random key on every request.
+- **API keys are trust-on-assertion.** The key → tier mapping assumes keys are authenticated upstream;
+  this service does not verify a secret, so anyone presenting a known key gets that tier. Put real
+  authentication in front of the gateway for production use.
+- **Client IP** comes from the socket address by default. Behind a proxy/LB, set
+  `ratelimit.trust-forwarded-for: true` to use the leftmost `X-Forwarded-For` entry instead — opt-in
+  because that header is client-spoofable and is only trustworthy when a known proxy overwrites it.
 
 ## Roadmap
 
