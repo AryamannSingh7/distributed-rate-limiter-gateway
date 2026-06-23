@@ -1,10 +1,13 @@
 # Distributed Rate Limiter + API Gateway
 
+[![CI](https://github.com/AryamannSingh7/distributed-rate-limiter-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/AryamannSingh7/distributed-rate-limiter-gateway/actions/workflows/ci.yml)
+[![Java 17](https://img.shields.io/badge/Java-17-orange.svg)](https://adoptium.net/)
+[![Spring Boot 3.3](https://img.shields.io/badge/Spring%20Boot-3.3.5-6db33f.svg)](https://spring.io/projects/spring-boot)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A production-grade, **distributed** rate limiting service built on **Spring Cloud Gateway** and
 **Redis**. Rate limits hold *correctly and atomically* across N gateway instances sharing one
 Redis — enforced via server-side **Lua scripts** so there are no race conditions or double-counting.
-
-> Status: **work in progress** — built milestone by milestone. See the roadmap below.
 
 ## Why this project
 
@@ -23,7 +26,7 @@ correctness test plus reproducible load-test numbers.
 - **Standard 429 responses**: `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`.
 - **Observability**: Micrometer → Prometheus → Grafana dashboard.
 - **Tested**: unit (per algorithm), concurrency (atomicity), and distributed correctness (Testcontainers).
-- **Benchmarked**: reproducible k6 load tests with an algorithm comparison.
+- **Benchmarked**: reproducible k6 load test — ~8k req/s through the full atomic path, p95 < 10 ms.
 
 ## Architecture
 
@@ -49,23 +52,92 @@ correctness test plus reproducible load-test numbers.
 Requires Java 17, Maven, Docker.
 
 ```bash
-# Build everything + run tests
+# Build everything + run tests (Testcontainers starts Redis automatically)
 mvn verify
 
 # Bring up the full stack (gateway, Redis, demo backend, Prometheus, Grafana)
 docker compose -f infra/docker-compose.yml up
 ```
 
+Once the stack is up:
+
+| Service | URL |
+|---|---|
+| Gateway | http://localhost:8080 |
+| Demo backend (echo) | http://localhost:8080/api/echo |
+| Prometheus | http://localhost:9090 |
+| Grafana (anonymous admin) | http://localhost:3000 |
+
+```bash
+# Any unknown/absent API key is the "free" tier. On the demo route (/api/**) free callers hit
+# a stricter per-route override (Fixed Window, 5/s) — burst past it to see 429s.
+for i in $(seq 1 12); do
+  curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/api/echo
+done
+
+# premium-demo-key → premium tier (Token Bucket, 200/s) — sails through the same burst.
+```
+
+A 429 response carries `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and
+`X-RateLimit-Reset`. Tiers, algorithms, limits, and per-route overrides are all defined in
+[`application.yml`](gateway-service/src/main/resources/application.yml) — changing them needs no
+rebuild.
+
+> **Local note (Windows / Docker Desktop):** if Testcontainers can't reach the Docker daemon, start
+> a Redis container yourself and run the tests against it:
+> `docker run -d -p 6379:6379 redis:7-alpine` then `REDIS_HOST=localhost mvn verify`.
+
+## Continuous integration
+
+[GitHub Actions](.github/workflows/ci.yml) runs `mvn verify` on every push and PR to `main`
+(Ubuntu, Temurin JDK 17, cached Maven). On Linux runners Docker is available, so Testcontainers
+spins up Redis itself — the full suite, including the **distributed correctness** and
+**concurrency/atomicity** tests, runs in CI exactly as it does locally.
+
 ## Roadmap
 
 - [x] **M0** — Maven multi-module skeleton
-- [ ] **M1** — Core abstractions + Token Bucket Lua, proven atomic
-- [ ] **M2** — End-to-end gateway (filter + demo backend, 429 + headers)
-- [ ] **M3** — All 4 algorithms + config-driven switching + tiers
-- [ ] **M4** — Observability (Micrometer + Prometheus + Grafana)
-- [ ] **M5** — Distributed correctness test (Testcontainers, 2 instances)
-- [ ] **M6** — k6 load tests + benchmark numbers
-- [ ] **M7** — CI + README polish
+- [x] **M1** — Core abstractions + Token Bucket Lua, proven atomic
+- [x] **M2** — End-to-end gateway (filter + demo backend, 429 + headers)
+- [x] **M3** — All 4 algorithms + config-driven switching + tiers
+- [x] **M4** — Observability (Micrometer + Prometheus + Grafana)
+- [x] **M5** — Distributed correctness test (Testcontainers, 2 instances)
+- [x] **M6** — k6 load tests + benchmark numbers
+- [x] **M7** — CI + README polish
+
+## Distributed correctness
+
+The headline claim — *limits hold exactly across instances* — is proven, not asserted.
+`DistributedRateLimitTest` boots **two independent gateway application contexts** in one JVM on
+random ports, both sharing **one Redis** and one backend. It then fires **200 concurrent clients**
+split evenly across the two instances at a single API key whose limit is **50**. The test asserts:
+
+- `allowed == 50` globally (e.g. instance A served 22, instance B served 28 — never 50 + 50),
+- `allowed + blocked == 200` (every request accounted for),
+- zero fail-open errors.
+
+This is only possible because the check-and-decrement is a single atomic Lua script — Redis runs Lua
+single-threaded, so two instances can never both read a stale count and over-admit.
+
+## Benchmarks
+
+Load tested with [k6](infra/k6) against the full gateway → Lua → Redis path. A dedicated `bench`
+tier (Token Bucket, 1,000,000/s) ensures nothing is throttled, so the run measures **gateway +
+limiter overhead**, not 429 rejection.
+
+Sample run — 50 VUs for 85s, local Docker Desktop / WSL2:
+
+| Metric | Result |
+|---|---|
+| Throughput | **~8,070 req/s** (685,715 requests) |
+| Failed requests | **0** |
+| Non-200 responses | **0** |
+| Latency p95 | **9.47 ms** |
+| Latency max | **44 ms** |
+| Checks passed | **100%** |
+
+Reproduce: `docker compose -f infra/docker-compose.yml --profile bench up k6` (see
+[`infra/k6/README.md`](infra/k6/README.md) for tunables).
 
 ## Algorithms (summary)
 
@@ -76,4 +148,9 @@ docker compose -f infra/docker-compose.yml up
 | Sliding Window Counter | High | Low | Good | Weighted prev+curr window — the practical default |
 | Fixed Window | Low | Lowest | Burst at boundary | Baseline for comparison |
 
-_Detailed explanations, tradeoffs, and benchmark results are added as milestones land._
+Each algorithm is implemented as a Redis Lua script on a shared `AbstractLuaRateLimiter` base, unit
+tested with a deterministic clock, and selectable purely via config.
+
+## License
+
+[MIT](LICENSE)
