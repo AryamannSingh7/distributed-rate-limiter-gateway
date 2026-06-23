@@ -23,6 +23,7 @@ import java.net.InetSocketAddress;
 public class ClientKeyResolver {
 
     public static final String API_KEY_HEADER = "X-API-Key";
+    public static final String FORWARDED_FOR_HEADER = "X-Forwarded-For";
 
     private final RateLimitProperties properties;
 
@@ -51,9 +52,25 @@ public class ClientKeyResolver {
         return (apiKey != null && !apiKey.isBlank()) ? apiKey.trim() : null;
     }
 
-    /** The caller's IP identity ({@code ip:<addr>}), from the remote socket address. */
+    /**
+     * The caller's IP identity ({@code ip:<addr>}). Behind a proxy the socket address is the proxy's,
+     * so when {@code ratelimit.trust-forwarded-for} is enabled the originating client is taken from the
+     * leftmost {@code X-Forwarded-For} entry instead. That header is only trustworthy when a known proxy
+     * sets it (it is otherwise client-spoofable), which is why honouring it is opt-in.
+     */
     private String clientIp(ServerWebExchange exchange) {
-        InetSocketAddress remote = exchange.getRequest().getRemoteAddress();
+        ServerHttpRequest request = exchange.getRequest();
+        if (properties.isTrustForwardedFor()) {
+            String forwarded = request.getHeaders().getFirst(FORWARDED_FOR_HEADER);
+            if (forwarded != null && !forwarded.isBlank()) {
+                // "client, proxy1, proxy2" — the leftmost hop is the originating client.
+                String client = forwarded.split(",", 2)[0].trim();
+                if (!client.isEmpty()) {
+                    return "ip:" + client;
+                }
+            }
+        }
+        InetSocketAddress remote = request.getRemoteAddress();
         if (remote != null && remote.getAddress() != null) {
             return "ip:" + remote.getAddress().getHostAddress();
         }

@@ -39,6 +39,14 @@ public class RateLimitProperties {
     /** Tier applied to callers whose API key is unmapped (or who send no key). */
     private String defaultTier = "free";
 
+    /**
+     * When true, derive the client IP from the {@code X-Forwarded-For} header (leftmost entry) instead
+     * of the socket's remote address. Default false: {@code X-Forwarded-For} is client-spoofable, so it
+     * must only be trusted when this gateway sits behind a proxy/LB that overwrites it. Behind a proxy
+     * with this left false, every caller collapses onto the proxy's IP and shares one bucket.
+     */
+    private boolean trustForwardedFor = false;
+
     /** Named tiers and the rule each enforces. */
     private Map<String, Rule> tiers = new LinkedHashMap<>();
 
@@ -119,6 +127,14 @@ public class RateLimitProperties {
 
     public void setDefaultTier(String defaultTier) {
         this.defaultTier = defaultTier;
+    }
+
+    public boolean isTrustForwardedFor() {
+        return trustForwardedFor;
+    }
+
+    public void setTrustForwardedFor(boolean trustForwardedFor) {
+        this.trustForwardedFor = trustForwardedFor;
     }
 
     public Map<String, Rule> getTiers() {

@@ -29,6 +29,12 @@ class ClientKeyResolverTest {
         return MockServerWebExchange.from(builder);
     }
 
+    private static MockServerWebExchange requestForwarded(String remoteIp, String forwardedFor) {
+        return MockServerWebExchange.from(MockServerHttpRequest.get("/api/echo")
+                .remoteAddress(new java.net.InetSocketAddress(remoteIp, 12345))
+                .header(ClientKeyResolver.FORWARDED_FOR_HEADER, forwardedFor));
+    }
+
     @Test
     void recognizedKeyGetsItsOwnBucket() {
         ClientKeyResolver resolver = new ClientKeyResolver(propsWithKnownKey());
@@ -64,5 +70,33 @@ class ClientKeyResolverTest {
         ClientKeyResolver resolver = new ClientKeyResolver(propsWithKnownKey());
 
         assertThat(resolver.resolve(request("198.51.100.4", null))).isEqualTo("ip:198.51.100.4");
+    }
+
+    @Test
+    void forwardedForIgnoredByDefault() {
+        // trust-forwarded-for defaults to false, so a spoofable header must not change the identity.
+        ClientKeyResolver resolver = new ClientKeyResolver(propsWithKnownKey());
+
+        assertThat(resolver.resolve(requestForwarded("10.0.0.9", "1.2.3.4"))).isEqualTo("ip:10.0.0.9");
+    }
+
+    @Test
+    void forwardedForUsedWhenTrusted() {
+        RateLimitProperties p = propsWithKnownKey();
+        p.setTrustForwardedFor(true);
+        ClientKeyResolver resolver = new ClientKeyResolver(p);
+
+        // Leftmost entry is the originating client; the proxy chain after it is ignored.
+        assertThat(resolver.resolve(requestForwarded("10.0.0.9", "1.2.3.4, 70.0.0.1, 10.0.0.9")))
+                .isEqualTo("ip:1.2.3.4");
+    }
+
+    @Test
+    void blankForwardedForFallsBackToRemoteAddress() {
+        RateLimitProperties p = propsWithKnownKey();
+        p.setTrustForwardedFor(true);
+        ClientKeyResolver resolver = new ClientKeyResolver(p);
+
+        assertThat(resolver.resolve(requestForwarded("10.0.0.9", "  "))).isEqualTo("ip:10.0.0.9");
     }
 }
