@@ -7,7 +7,7 @@ import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -47,6 +47,10 @@ import static org.assertj.core.api.Assertions.assertThat;
                 "ratelimit.tiers.premium.algorithm=TOKEN_BUCKET",
                 "ratelimit.tiers.premium.limit=10",
                 "ratelimit.tiers.premium.window=60s",
+                // Recognized keys earn their own bucket; two free keys let us prove per-identity
+                // isolation, and an unrecognized key must NOT (it shares the caller's IP bucket).
+                "ratelimit.api-keys[free-key]=free",
+                "ratelimit.api-keys[free-key-2]=free",
                 "ratelimit.api-keys[premium-key]=premium",
                 "ratelimit.fail-open=false"
         })
@@ -88,10 +92,10 @@ class RateLimitGatewayTest {
         }
     }
 
-    @BeforeAll
-    static void flushRedis() {
-        // The premium test uses a fixed API key (it must match the api-keys mapping), so its bucket
-        // would otherwise persist across reruns against the shared test Redis. Start from a clean DB.
+    @BeforeEach
+    void flushRedis() {
+        // Tests use fixed, recognized API keys (which must match the api-keys mapping), so buckets are
+        // reused across tests and reruns. Flush before each test so every one starts from a clean DB.
         LettuceConnectionFactory cf =
                 new LettuceConnectionFactory(new RedisStandaloneConfiguration(redisHost, redisPort));
         cf.afterPropertiesSet();
@@ -128,7 +132,7 @@ class RateLimitGatewayTest {
 
     @Test
     void allowsUpToLimitThenReturns429() {
-        String apiKey = "test-" + UUID.randomUUID();
+        String apiKey = "free-key"; // recognized free-tier key -> its own bucket (capacity 3)
 
         // First three requests fit in the bucket (capacity 3): proxied, with decreasing remaining.
         for (int i = 0; i < 3; i++) {
@@ -159,22 +163,33 @@ class RateLimitGatewayTest {
     }
 
     @Test
-    void differentApiKeysHaveIndependentBuckets() {
-        String keyA = "a-" + UUID.randomUUID();
-        String keyB = "b-" + UUID.randomUUID();
-
-        // Drain key A completely.
+    void differentRecognizedKeysHaveIndependentBuckets() {
+        // Two recognized free-tier keys -> two distinct buckets.
+        // Drain free-key completely.
         for (int i = 0; i < 3; i++) {
-            client.get().uri("/api/echo").header("X-API-Key", keyA)
+            client.get().uri("/api/echo").header("X-API-Key", "free-key")
                     .exchange().expectStatus().isOk();
         }
-        client.get().uri("/api/echo").header("X-API-Key", keyA)
+        client.get().uri("/api/echo").header("X-API-Key", "free-key")
                 .exchange().expectStatus().isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
 
-        // Key B still has a full bucket.
-        client.get().uri("/api/echo").header("X-API-Key", keyB)
+        // free-key-2 still has a full bucket.
+        client.get().uri("/api/echo").header("X-API-Key", "free-key-2")
                 .exchange().expectStatus().isOk()
                 .expectHeader().valueEquals("X-RateLimit-Remaining", "2");
+    }
+
+    @Test
+    void rotatingUnrecognizedKeysCannotBypassTheLimit() {
+        // The security guarantee end-to-end: an unrecognized key does not mint its own bucket, so a
+        // client sending a different random key per request still shares one bucket (its IP) and is
+        // capped at the free limit of 3 — they cannot escape by rotating the X-API-Key header.
+        for (int i = 0; i < 3; i++) {
+            client.get().uri("/api/echo").header("X-API-Key", "rogue-" + UUID.randomUUID())
+                    .exchange().expectStatus().isOk();
+        }
+        client.get().uri("/api/echo").header("X-API-Key", "rogue-" + UUID.randomUUID())
+                .exchange().expectStatus().isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
     }
 
     @Test
@@ -194,7 +209,7 @@ class RateLimitGatewayTest {
 
     @Test
     void emitsDecisionMetricsTaggedByOutcomeTierRouteAlgorithm() {
-        String apiKey = "metrics-" + UUID.randomUUID(); // unmapped -> free tier (TOKEN_BUCKET, limit 3)
+        String apiKey = "free-key"; // recognized free-tier key (TOKEN_BUCKET, limit 3)
 
         double allowedBefore = decisionCount("allowed");
         double blockedBefore = decisionCount("blocked");
